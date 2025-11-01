@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Flying Face Game</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #333;
+            color: white;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: 'Arial', sans-serif;
+            overflow: hidden; 
+            touch-action: none; 
+        }
+
+        #gameContainer {
+            position: relative;
+            width: 360px;
+            height: 640px;
+            max-width: 100vw;
+            max-height: 100vh;
+            overflow: hidden;
+            border: 2px solid #000;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            touch-action: none; 
+        }
+
+        #gameOverScreen {
+            display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.8);
+            padding: 0;
+            border-radius: 0; 
+            text-align: center;
+            z-index: 100;
+            width: auto;
+            cursor: pointer; 
+        }
+
+        #gameOverImage {
+            max-width: 150px; 
+            max-height: 80vh; 
+            height: auto;
+            border-radius: 0; 
+        }
+
+        #winScreen {
+            display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.8);
+            padding: 20px;
+            border-radius: 15px;
+            text-align: center;
+            z-index: 100;
+            box-shadow: 0 0 20px rgba(255, 215, 0, 0.5);
+            width: 80%;
+            cursor: pointer; 
+        }
+
+        #winImage {
+            max-width: 200px;
+            width: 100%;
+            height: auto;
+            border-radius: 0; 
+        }
+    </style>
+</head>
+<body>
+
+    <div id="gameContainer">
+        <canvas id="gameCanvas"></canvas>
+        
+        <div id="gameOverScreen">
+            <img id="gameOverImage" src="" alt="Game Over">
+        </div>
+
+        <div id="winScreen">
+            <img id="winImage" src="" alt="You Win!">
+            <h3 style="color: #ddd; margin-top: 15px; font-weight: normal;">click to restart</h3>
+        </div>
+    </div>
+
+    <script>
+        // --- 1. SETUP ---
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const gameContainer = document.getElementById('gameContainer');
+
+        canvas.width = gameContainer.clientWidth;
+        canvas.height = gameContainer.clientHeight;
+
+        const gameOverScreen = document.getElementById('gameOverScreen');
+        const gameOverImageEl = document.getElementById('gameOverImage');
+        
+        const winScreen = document.getElementById('winScreen');
+        const winImageEl = document.getElementById('winImage');
+        
+        // --- 2. ASSET LOADING (Images) ---
+        const assetURLs = {
+            player: 'https://i.ibb.co/LqjymPW/1000043983-removebg-preview.png',
+            // --- CORRECTED OBSTACLE IMAGE URL ---
+            obstacle: 'https://i.ibb.co/C3XFC058/IMG-20251031-105151-828.jpg', 
+            background: 'https://i.ibb.co/xST4SwNT/gg.jpg',
+            gameOver: 'https://i.ibb.co/YTJ4SR22/1761908921799.png',
+            win: 'https://i.ibb.co/CKqPF1vT/end.png', 
+            bricks: 'https://i.ibb.co/Xf8tk8JC/br.jpg',
+            theEnd: 'https://i.ibb.co/HTxy25j0/1761919388052.png'
+        };
+
+        let images = {};
+        let imagesLoaded = 0;
+        const numImages = Object.keys(assetURLs).length;
+        let allImagesLoaded = false;
+        
+        let obstacleHeight = 0; 
+        let obstacleWidth = 80;
+
+
+        function imageLoaded() {
+            imagesLoaded++;
+            if (imagesLoaded === numImages) {
+                allImagesLoaded = true;
+                if (images.obstacle.width > 0) {
+                     obstacleHeight = (images.obstacle.height / images.obstacle.width) * obstacleWidth;
+                } else {
+                    obstacleHeight = 300; 
+                }
+                gameOverImageEl.src = images.gameOver.src;
+                winImageEl.src = images.win.src;
+                gameLoop();
+            }
+        }
+
+        for (const key in assetURLs) {
+            images[key] = new Image();
+            images[key].onload = imageLoaded;
+            images[key].onerror = () => { console.error(`Failed to load image: ${key}`); imageLoaded(); };
+            images[key].src = assetURLs[key];
+        }
+
+        // --- AUDIO ---
+        const audioMusic = new Audio('https://files.catbox.moe/ow2kxo.mp3'); 
+        audioMusic.loop = true;
+        audioMusic.volume = 0.4; 
+
+        const audioClick = new Audio('https://files.catbox.moe/wm3oz7.mp3'); 
+        // **UPDATED GAME OVER AUDIO**
+        const audioOut = new Audio('https://files.catbox.moe/0qvoxx.mp3'); 
+        const audioWin = new Audio('https://files.catbox.moe/p80ivs.mp3'); 
+        const audioScore = audioClick; 
+        
+        let audioReady = false; 
+
+        // --- 3. GAME VARIABLES ---
+        let gameState = 'playing'; 
+        let frames = 0;
+        let score = 0;
+        let obstacles = [];
+        let winObject = null; 
+        
+        const GRAVITY = 0.15; 
+        const FLAP_STRENGTH = -2.8; 
+        const PIPE_SPEED = 1.0; 
+        const GAP_HEIGHT = 180;
+        const WIN_SCORE = 15;
+        const BRICK_HEIGHT = 110; 
+
+        const player = {
+            x: canvas.width / 4,
+            y: canvas.height / 2,
+            width: 50,
+            height: 50,
+            velocityY: 0
+        };
+
+        // *** Predefined maps ***
+        let obstacleIndex = 0;
+        let currentMapIndex = 0;
+
+        const mapPatterns = [
+            // Map 1
+            [230, 250, 270, 290, 310, 290, 270, 250, 230, 210, 190, 170, 150, 170, 190, 210, 230, 250, 270, 290],
+            // Map 2
+            [150, 200, 250, 300, 350, 300, 250, 200, 150, 200, 250, 300, 350, 250, 150, 230, 300, 230, 150, 200]
+        ];
+
+        // --- 4. GAME LOGIC FUNCTIONS ---
+        function gameLoop() {
+            if (gameState === 'playing') {
+                update();
+                frames++; 
+            }
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        function update() {
+            player.velocityY += GRAVITY;
+            player.y += player.velocityY;
+
+            if (player.y < BRICK_HEIGHT || player.y + player.height > canvas.height - BRICK_HEIGHT) {
+                gameOver();
+                return;
+            }
+
+            if (frames % 160 === 0 && winObject === null) { 
+                const currentMap = mapPatterns[currentMapIndex];
+                let gapY = currentMap[obstacleIndex % currentMap.length];
+                obstacleIndex++;
+
+                obstacles.push({
+                    x: canvas.width,
+                    yTop: gapY - obstacleHeight, 
+                    yBottom: gapY + GAP_HEIGHT,
+                    passed: false
+                });
+            }
+
+            for (let i = obstacles.length - 1; i >= 0; i--) {
+                let obs = obstacles[i];
+                obs.x -= PIPE_SPEED;
+
+                if (player.x + player.width > obs.x && player.x < obs.x + obstacleWidth) {
+                    if (player.y < obs.yTop + obstacleHeight || player.y + player.height > obs.yBottom) {
+                        gameOver();
+                        return;
+                    }
+                }
+
+                if (!obs.passed && player.x > obs.x + obstacleWidth) {
+                    score++;
+                    obs.passed = true;
+                    try {
+                        audioScore.currentTime = 0;
+                        audioScore.play();
+                    } catch(e) {}
+
+                    if (score === WIN_SCORE && winObject === null) {
+                        let winImg = images.theEnd; 
+                        let winHeight = 200; 
+                        let winWidth = (winImg.width > 0) ? (winImg.width / winImg.height) * winHeight : 200;
+                        
+                        winObject = {
+                            x: canvas.width + 100, 
+                            y: (canvas.height - winHeight) / 2, 
+                            width: winWidth,
+                            height: winHeight
+                        };
+                    }
+                }
+
+                if (obs.x + obstacleWidth < 0) {
+                    obstacles.splice(i, 1);
+                }
+            }
+            
+            if (winObject !== null) {
+                winObject.x -= PIPE_SPEED; 
+
+                if (
+                    player.x < winObject.x + winObject.width &&
+                    player.x + player.width > winObject.x &&
+                    player.y < winObject.y + winObject.height &&
+                    player.y + player.height > winObject.y
+                ) {
+                    gameWin(); 
+                    return; 
+                }
+                
+                if (winObject.x + winObject.width < 0) {
+                    winObject = null;
+                }
+            }
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Background
+            if (images.background.complete) {
+                const img = images.background;
+                const playableHeight = canvas.height - 2 * BRICK_HEIGHT; 
+                const canvasRatio = canvas.width / playableHeight;
+                const imgRatio = img.width / img.height;
+                
+                let newWidth, newHeight, offsetY;
+
+                if (imgRatio > canvasRatio) {
+                    newHeight = playableHeight;
+                    newWidth = img.width * (newHeight / img.height);
+                    offsetY = BRICK_HEIGHT;
+                } else {
+                    newWidth = canvas.width;
+                    newHeight = img.height * (newWidth / img.width);
+                    offsetY = (playableHeight - newHeight) / 2 + BRICK_HEIGHT;
+                }
+
+                let bgX = -(frames * 0.2 % newWidth); 
+                ctx.drawImage(img, bgX, offsetY, newWidth, newHeight);
+                ctx.drawImage(img, bgX + newWidth, offsetY, newWidth, newHeight);
+            }
+
+            // Obstacles
+            for (const obs of obstacles) {
+                ctx.drawImage(images.obstacle, obs.x, obs.yBottom, obstacleWidth, obstacleHeight);
+                ctx.save();
+                ctx.translate(obs.x + obstacleWidth / 2, obs.yTop + obstacleHeight / 2);
+                ctx.rotate(Math.PI);
+                ctx.drawImage(images.obstacle, -obstacleWidth / 2, -obstacleHeight / 2, obstacleWidth, obstacleHeight);
+                ctx.restore();
+            }
+            
+            if (winObject !== null && images.theEnd.complete) {
+                ctx.drawImage(images.theEnd, winObject.x, winObject.y, winObject.width, winObject.height);
+            }
+
+            // Bricks
+            if (images.bricks.complete) {
+                let brickX = -(frames * PIPE_SPEED % canvas.width);
+                ctx.drawImage(images.bricks, brickX, 0, canvas.width, BRICK_HEIGHT);
+                ctx.drawImage(images.bricks, brickX + canvas.width, 0, canvas.width, BRICK_HEIGHT);
+                ctx.drawImage(images.bricks, brickX, canvas.height - BRICK_HEIGHT, canvas.width, BRICK_HEIGHT);
+                ctx.drawImage(images.bricks, brickX + canvas.width, canvas.height - BRICK_HEIGHT, canvas.width, BRICK_HEIGHT);
+            }
+
+            // Player
+            if (gameState !== 'gameOver' && gameState !== 'win') {
+                ctx.drawImage(images.player, player.x, player.y, player.width, player.height);
+            }
+
+            // Score
+            ctx.fillStyle = 'white';
+            ctx.font = 'bold 40px Arial';
+            ctx.textAlign = 'center';
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = 2;
+            
+            if (gameState === 'playing') {
+                 ctx.strokeText(score, canvas.width / 2, 70);
+                 ctx.fillText(score, canvas.width / 2, 70);
+            }
+        }
+
+        // --- 5. HELPER FUNCTIONS ---
+        function flap() {
+            player.velocityY = FLAP_STRENGTH; 
+            try {
+                audioClick.currentTime = 0; 
+                audioClick.play();
+            } catch(e){}
+        }
+
+        function gameOver() {
+            if (gameState === 'gameOver' || gameState === 'win') return;
+            gameState = 'gameOver';
+            audioMusic.pause(); 
+            try { audioOut.play(); } catch(e){} 
+            gameOverScreen.style.display = 'block';
+        }
+
+        function gameWin() {
+            if (gameState === 'win') return;
+            gameState = 'win';
+            audioMusic.pause(); 
+            try { audioWin.play(); } catch(e){} 
+            
+            winScreen.style.display = 'block';
+        }
+
+        function resetGame() {
+            player.y = canvas.height / 2;
+            player.velocityY = 0;
+            obstacles = [];
+            score = 0;
+            frames = 0; 
+            winObject = null; 
+            
+            obstacleIndex = 0;
+            currentMapIndex = (currentMapIndex + 1) % mapPatterns.length; 
+            
+            gameState = 'playing';
+            gameOverScreen.style.display = 'none';
+            winScreen.style.display = 'none';
+            
+            try {
+                audioMusic.pause();
+                audioMusic.currentTime = 0;
+                audioOut.pause();
+                audioOut.currentTime = 0;
+                audioWin.pause();
+                audioWin.currentTime = 0;
+                
+                if (audioReady) { 
+                    audioMusic.play().catch(e => console.error("Music restart failed:", e));
+                }
+
+            } catch(e) {}
+        }
+
+        // --- 6. EVENT LISTENERS ---
+        
+        function handleInteraction() {
+            
+            if (gameState === 'playing') {
+                flap();
+            
+                if (!audioReady) {
+                    audioReady = true;
+                    console.log("Audio Unlocked!");
+                    
+                    audioMusic.play().catch(e => console.error("Music nahi chala:", e));
+                }
+            }
+        }
+
+        canvas.addEventListener('click', handleInteraction);
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            handleInteraction();
+        }, { passive: false });
+
+        gameOverScreen.addEventListener('click', (e) => {
+            resetGame();
+        });
+
+        winScreen.addEventListener('click', (e) => {
+            e.stopPropagation(); 
+            resetGame();
+        });
+
+    </script>
+</body>
+</html>
